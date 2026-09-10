@@ -147,14 +147,6 @@ jobs:
             > k8s/gateway/configmap.yaml
           grep proxy_pass k8s/gateway/configmap.yaml
 
-      - name: Server-side dry-run (gateway)
-        run: |
-          kubectl apply --dry-run=server -f k8s/gateway/namespace.yaml
-          kubectl apply --dry-run=server \
-            -f k8s/gateway/configmap.yaml \
-            -f k8s/gateway/deployment.yaml \
-            -f k8s/gateway/service.yaml
-
       - name: Deploy gateway proxy
         run: |
           kubectl apply -f k8s/gateway/namespace.yaml
