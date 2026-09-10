@@ -58,7 +58,7 @@ aws s3api put-bucket-versioning --bucket sentinel-tfstate-darwhas \
 ### 1. Clone and configure GitHub
 
 ```bash
-git clone https://github.com/<your-user>/rapyd-sentinel.git
+git clone https://github.com/darwhas/rapyd-sentinel.git
 ```
 
 In the GitHub repo: **Settings → Secrets and variables → Actions**, add:
