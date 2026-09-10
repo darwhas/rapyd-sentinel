@@ -108,11 +108,6 @@ jobs:
       - name: Kubeconfig (backend)
         run: aws eks update-kubeconfig --name $BACKEND_CLUSTER --region $AWS_REGION
 
-      - name: Server-side dry-run (backend)
-        run: |
-          kubectl apply --dry-run=server -f k8s/backend/namespace.yaml
-          kubectl apply --dry-run=server -f k8s/backend/
-
       - name: Deploy backend
         run: |
           kubectl apply -f k8s/backend/namespace.yaml
