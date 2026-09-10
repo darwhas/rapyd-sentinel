@@ -1,0 +1,18 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+*.tfvars
+!*.auto.tfvars
+
+
+# Rendered (CI generates it from the template)
+k8s/gateway/configmap.yaml
+
+# Local
+.env
+*.pem
+.vscode/

@@ -1,0 +1,205 @@
+name: sentinel-split
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sentinel-terraform
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-2
+  TF_DIR: terraform
+  BACKEND_CLUSTER: eks-backend
+  GATEWAY_CLUSTER: eks-gateway
+
+jobs:
+  # =========================================================
+  # 1. Terraform: fmt / validate / tflint / plan / apply
+  # =========================================================
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Terraform fmt
+        run: terraform -chdir=${{ env.TF_DIR }} fmt -check -recursive
+
+      - name: Terraform init
+        run: terraform -chdir=${{ env.TF_DIR }} init -input=false
+
+      - name: Terraform validate
+        run: terraform -chdir=${{ env.TF_DIR }} validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.53.0
+
+      - name: TFLint
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          tflint --init
+          tflint --recursive --format compact
+
+      - name: Terraform plan
+        run: terraform -chdir=${{ env.TF_DIR }} plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform -chdir=${{ env.TF_DIR }} apply -input=false -auto-approve tfplan
+
+  # =========================================================
+  # 2. Kubernetes: validate manifests + deploy apps + e2e test
+  # =========================================================
+  deploy-apps:
+    needs: terraform
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          sudo mv /tmp/kubeconform /usr/local/bin/
+
+      - name: Validate manifests (kubeconform)
+        run: |
+          kubeconform -strict -summary \
+            k8s/backend/namespace.yaml \
+            k8s/backend/deployment.yaml \
+            k8s/backend/service.yaml \
+            k8s/backend/networkpolicy.yaml \
+            k8s/gateway/namespace.yaml \
+            k8s/gateway/deployment.yaml \
+            k8s/gateway/service.yaml
+
+      # ------------------- BACKEND -------------------
+      - name: Kubeconfig (backend)
+        run: aws eks update-kubeconfig --name $BACKEND_CLUSTER --region $AWS_REGION
+
+      - name: Server-side dry-run (backend)
+        run: |
+          kubectl apply --dry-run=server -f k8s/backend/namespace.yaml
+          kubectl apply --dry-run=server -f k8s/backend/
+
+      - name: Deploy backend
+        run: |
+          kubectl apply -f k8s/backend/namespace.yaml
+          kubectl apply -f k8s/backend/
+          kubectl -n sentinel-backend rollout status deploy/backend --timeout=180s
+
+      - name: Wait for internal ELB (backend)
+        id: backend_elb
+        run: |
+          for i in $(seq 1 40); do
+            HOST=$(kubectl -n sentinel-backend get svc backend \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            if [ -n "$HOST" ]; then
+              echo "Internal ELB: $HOST"
+              echo "hostname=$HOST" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "waiting for internal ELB... ($i/40)"
+            sleep 15
+          done
+          echo "Internal ELB never got a hostname" >&2
+          exit 1
+
+      # ------------------- GATEWAY -------------------
+      - name: Kubeconfig (gateway)
+        run: aws eks update-kubeconfig --name $GATEWAY_CLUSTER --region $AWS_REGION
+
+      - name: Render proxy ConfigMap
+        env:
+          BACKEND_ENDPOINT: ${{ steps.backend_elb.outputs.hostname }}
+        run: |
+          # Restrict envsubst to BACKEND_ENDPOINT only, so nginx
+          # runtime vars ($host, $proxy_add_x_forwarded_for) survive.
+          envsubst '${BACKEND_ENDPOINT}' \
+            < k8s/gateway/configmap.tpl.yaml \
+            > k8s/gateway/configmap.yaml
+          grep proxy_pass k8s/gateway/configmap.yaml
+
+      - name: Server-side dry-run (gateway)
+        run: |
+          kubectl apply --dry-run=server -f k8s/gateway/namespace.yaml
+          kubectl apply --dry-run=server \
+            -f k8s/gateway/configmap.yaml \
+            -f k8s/gateway/deployment.yaml \
+            -f k8s/gateway/service.yaml
+
+      - name: Deploy gateway proxy
+        run: |
+          kubectl apply -f k8s/gateway/namespace.yaml
+          kubectl apply -f k8s/gateway/configmap.yaml
+          kubectl apply -f k8s/gateway/deployment.yaml
+          kubectl apply -f k8s/gateway/service.yaml
+          kubectl -n sentinel-gateway rollout restart deploy/proxy
+          kubectl -n sentinel-gateway rollout status deploy/proxy --timeout=180s
+
+      - name: Wait for public ELB (gateway)
+        id: gateway_elb
+        run: |
+          for i in $(seq 1 40); do
+            HOST=$(kubectl -n sentinel-gateway get svc proxy \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            if [ -n "$HOST" ]; then
+              echo "Public ELB: $HOST"
+              echo "hostname=$HOST" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "waiting for public ELB... ($i/40)"
+            sleep 15
+          done
+          echo "Public ELB never got a hostname" >&2
+          exit 1
+
+      # ------------------- E2E VALIDATION -------------------
+      - name: End-to-end test (proxy -> backend across VPC peering)
+        env:
+          PUBLIC_URL: http://${{ steps.gateway_elb.outputs.hostname }}
+        run: |
+          echo "Testing $PUBLIC_URL (ELB DNS may take a few minutes to propagate)"
+          for i in $(seq 1 40); do
+            BODY=$(curl -s --max-time 10 "$PUBLIC_URL" || true)
+            if echo "$BODY" | grep -q "Hello from backend"; then
+              echo "SUCCESS: proxy reached the backend across the peering."
+              echo "Response: $BODY"
+              exit 0
+            fi
+            echo "not ready yet ($i/40): $BODY"
+            sleep 15
+          done
+          echo "E2E test failed: backend response never received" >&2
+          exit 1

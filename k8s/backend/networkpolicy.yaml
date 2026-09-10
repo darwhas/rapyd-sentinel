@@ -1,0 +1,35 @@
+# Enforced by VPC CNI (enableNetworkPolicy=true in the addon).
+---
+# Default deny all ingress in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: sentinel-backend
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Allow only ELB/node traffic from the two VPC CIDRs to the
+# backend pods, and only on the app port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-http
+  namespace: sentinel-backend
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/16
+        - ipBlock:
+            cidr: 10.1.0.0/16
+      ports:
+        - protocol: TCP
+          port: 5678

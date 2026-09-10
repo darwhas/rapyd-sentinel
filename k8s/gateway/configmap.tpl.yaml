@@ -1,0 +1,26 @@
+# Template: ${BACKEND_ENDPOINT} is injected by the CI pipeline
+# (envsubst) with the internal ELB DNS name of the backend
+# service once it exists.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxy-config
+  namespace: sentinel-gateway
+data:
+  default.conf: |
+    server {
+      listen 8080;
+
+      location /healthz {
+        return 200 'ok';
+        add_header Content-Type text/plain;
+      }
+
+      location / {
+        proxy_pass http://${BACKEND_ENDPOINT};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 10s;
+      }
+    }

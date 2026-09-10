@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: sentinel-backend
+  labels:
+    app: backend
+  annotations:
+    # Internal ELB: private IPs only, lives in vpc-backend
+    # private subnets (tagged kubernetes.io/role/internal-elb).
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  # Only the gateway VPC CIDR may reach this load balancer.
+  loadBalancerSourceRanges:
+    - 10.0.0.0/16
+  selector:
+    app: backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5678
+      protocol: TCP
