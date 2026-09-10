@@ -20,3 +20,10 @@ provider "aws" {
     }
   }
 }
+
+# Alias without default_tags: the challenge account denies
+# iam:TagRole, so IAM roles must be created untagged.
+provider "aws" {
+  alias  = "no_default_tags"
+  region = var.region
+}

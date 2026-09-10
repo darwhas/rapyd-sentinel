@@ -49,11 +49,19 @@ module "peering" {
 module "iam_gateway" {
   source       = "./modules/iam"
   cluster_name = "eks-gateway"
+
+  providers = {
+    aws = aws.no_default_tags
+  }
 }
 
 module "iam_backend" {
   source       = "./modules/iam"
   cluster_name = "eks-backend"
+
+  providers = {
+    aws = aws.no_default_tags
+  }
 }
 
 ############################################
