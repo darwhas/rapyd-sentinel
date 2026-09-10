@@ -116,6 +116,7 @@ jobs:
       - name: Deploy backend
         run: |
           kubectl apply -f k8s/backend/namespace.yaml
+          kubectl apply --dry-run=server -f k8s/backend/
           kubectl apply -f k8s/backend/
           kubectl -n sentinel-backend rollout status deploy/backend --timeout=180s
 
@@ -162,6 +163,7 @@ jobs:
       - name: Deploy gateway proxy
         run: |
           kubectl apply -f k8s/gateway/namespace.yaml
+          kubectl apply --dry-run=server -f k8s/gateway/configmap.yaml -f k8s/gateway/deployment.yaml -f k8s/gateway/service.yaml
           kubectl apply -f k8s/gateway/configmap.yaml
           kubectl apply -f k8s/gateway/deployment.yaml
           kubectl apply -f k8s/gateway/service.yaml
